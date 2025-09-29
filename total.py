@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import time
 from openai import OpenAI
-import io
 
 st.set_page_config(page_title="Ritual Data Insights", layout="wide")
 st.title("Ritual Data Insights Analyzer")
@@ -12,16 +11,26 @@ st.title("Ritual Data Insights Analyzer")
 # -------------------------------
 st.sidebar.header("Upload Files and Enter API Key")
 primary_file = st.sidebar.file_uploader("Upload Primary Excel File", type=["xlsx"])
-mapped_file = st.sidebar.file_uploader("Upload Mapped Excel File (Optional)", type=["xlsx"])
+mapped_file = st.sidebar.file_uploader("Upload Mapped Excel File", type=["xlsx"])
 api_key = st.sidebar.text_input("Enter OpenAI API Key", type="password")
 
-if not primary_file:
-    st.warning("Please upload the primary Excel file to proceed.")
+# Require both files
+if not primary_file or not mapped_file:
+    st.warning("Please upload both Primary Excel and Mapped Excel files to proceed.")
     st.stop()
 
-# Read primary Excel
+if not api_key:
+    st.warning("Please enter your OpenAI API key to generate descriptions.")
+    st.stop()
+
+# -------------------------------
+# Read Excel files
+# -------------------------------
 df = pd.read_excel(primary_file)
 df.columns = df.columns.str.strip()
+
+mapped_df = pd.read_excel(mapped_file)
+mapped_df.columns = mapped_df.columns.str.strip()
 
 # -------------------------------
 # Basic counts
@@ -130,54 +139,46 @@ else:
 # -------------------------------
 # Repeated Families
 # -------------------------------
-repeated_families_count = None
-if mapped_file:
-    mapped_df = pd.read_excel(mapped_file)
-    mapped_df.columns = mapped_df.columns.str.strip()
-    if "Final Merged Family Id" in mapped_df.columns:
-        groups_only = mapped_df["Final Merged Family Id"].dropna().astype(str)
-        groups_only = groups_only[groups_only.str.startswith("GROUP")]
-        repeated_families_count = groups_only.nunique()
-        repeated_families_description = f"{repeated_families_count}"
-    else:
-        repeated_families_description = None
+if "Final Merged Family Id" in mapped_df.columns:
+    groups_only = mapped_df["Final Merged Family Id"].dropna().astype(str)
+    groups_only = groups_only[groups_only.str.startswith("GROUP")]
+    repeated_families_count = groups_only.nunique()
+    repeated_families_description = f"{repeated_families_count}"
 else:
-    repeated_families_description = None
+    repeated_families_description = "Mapped file missing 'Final Merged Family Id' column."
+    repeated_families_count = None
 
 # -------------------------------
 # OpenAI Descriptions
 # -------------------------------
-if api_key:
-    client = OpenAI(api_key=api_key)
-    prompts = {
-        "Individuals": f"Write a friendly description of Total Individuals: {total_individuals}.",
-        "Families": f"Write a friendly description of Total Families: {total_families}.",
-        "Gender": f"Write a friendly description of this gender distribution:\n{gender_distribution}",
-        "Villages": f"Write a friendly description of top 5 villages:\n{top_villages_description}",
-        "Castes": f"Write a friendly description of top 5 castes:\n{top_castes_description}",
-        "Years": f"Write a friendly description of top 5 years:\n{top_years_description}",
-        "Rituals": f"Write a friendly description of unique rituals:\n{unique_rituals_description}",
-        "Seasonal": f"Write a friendly description of seasonal ritual trend:\n{seasonal_description}"
-    }
-    if repeated_families_count:
-        prompts["Repeated"] = f"Explain repeated families: {repeated_families_count}"
+client = OpenAI(api_key=api_key)
+prompts = {
+    "Individuals": f"Write a friendly description of Total Individuals: {total_individuals}.",
+    "Families": f"Write a friendly description of Total Families: {total_families}.",
+    "Gender": f"Write a friendly description of this gender distribution:\n{gender_distribution}",
+    "Villages": f"Write a friendly description of top 5 villages:\n{top_villages_description}",
+    "Castes": f"Write a friendly description of top 5 castes:\n{top_castes_description}",
+    "Years": f"Write a friendly description of top 5 years:\n{top_years_description}",
+    "Rituals": f"Write a friendly description of unique rituals:\n{unique_rituals_description}",
+    "Seasonal": f"Write a friendly description of seasonal ritual trend:\n{seasonal_description}"
+}
+if repeated_families_count:
+    prompts["Repeated"] = f"Explain repeated families: {repeated_families_count}"
 
-    st.subheader("Generated Descriptions:")
-    for key, prompt in prompts.items():
-        try:
-            with st.spinner(f"Generating description for {key}..."):
-                response = client.chat.completions.create(
-                    model="gpt-4.1-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.7,
-                    max_tokens=150
-                )
-                text = response.choices[0].message.content.strip()
-                st.markdown(f"**{key}:** {text}")
-        except Exception as e:
-            st.error(f"Error generating description for {key}: {str(e)}")
-else:
-    st.info("Enter your OpenAI API key to generate friendly descriptions.")
+st.subheader("Generated Descriptions:")
+for key, prompt in prompts.items():
+    try:
+        with st.spinner(f"Generating description for {key}..."):
+            response = client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=150
+            )
+            text = response.choices[0].message.content.strip()
+            st.markdown(f"**{key}:** {text}")
+    except Exception as e:
+        st.error(f"Error generating description for {key}: {str(e)}")
 
 # -------------------------------
 # Display Raw Insights
