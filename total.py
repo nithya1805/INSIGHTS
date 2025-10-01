@@ -103,39 +103,102 @@ else:
     clean_rituals = "Ritual Name 1 column not found."
 
 # -------------------------------
-# Insights for Mapped file
+# Insights for Mapped file (Advanced Analysis)
 # -------------------------------
 mapped_individuals, mapped_families, mapped_gender = compute_gender_distribution(
     mapped_df, id_col="Individual ID", group_col="Final Merged Family Id"
 )
 
-if "Village/City" in mapped_df.columns and "Final Merged Family Id" in mapped_df.columns:
-    families = mapped_df[['Final Merged Family Id', 'Village/City']].drop_duplicates(subset=['Final Merged Family Id'])
-    mapped_villages = families.groupby('Village/City')['Final Merged Family Id'].nunique().sort_values(ascending=False).head(5)
-    mapped_villages_str = "\n".join([f"{i+1}. {v} ({c})" for i, (v, c) in enumerate(mapped_villages.items())])
-else:
-    mapped_villages_str = "Village/City column or Final Merged Family Id not found."
+mapped_insights = {
+    "Most Repeated Group": "Not available",
+    "First Last Appearance": "Not available",
+    "Seasonal Frequency": "Not available",
+    "Timeline": "Not available",
+    "Average Family Size": "Not available",
+    "Origin": "Not available"
+}
 
-if "Caste" in mapped_df.columns and "Final Merged Family Id" in mapped_df.columns:
-    families_caste = mapped_df[['Final Merged Family Id', 'Caste']].drop_duplicates(subset=['Final Merged Family Id'])
-    mapped_castes = families_caste.groupby('Caste')['Final Merged Family Id'].nunique().sort_values(ascending=False).head(5)
-    mapped_castes_str = "\n".join([f"{i+1}. {c} ({cnt})" for i, (c, cnt) in enumerate(mapped_castes.items())])
-else:
-    mapped_castes_str = "Caste column or Final Merged Family Id not found."
+if mapped_df is not None and "Final Merged Family Id" in mapped_df.columns and "Family Id" in mapped_df.columns:
+    groups_df = mapped_df[mapped_df["Final Merged Family Id"].astype(str).str.startswith("GROUP")].copy()
+    group_counts = groups_df.groupby("Final Merged Family Id")["Family Id"].nunique()
 
-year_col_candidates = ["Year", "year", "Ritual Year", "RitualYear"]
-year_col = next((c for c in year_col_candidates if c in mapped_df.columns), None)
-if year_col and "Final Merged Family Id" in mapped_df.columns:
-    families_year = mapped_df[[year_col, 'Final Merged Family Id']].drop_duplicates(subset=['Final Merged Family Id'])
-    mapped_years = families_year.groupby(year_col)['Final Merged Family Id'].nunique().sort_values(ascending=False).head(5)
-    mapped_years_str = "\n".join([f"{i+1}. {y} ({cnt})" for i, (y, cnt) in enumerate(mapped_years.items())])
-else:
-    mapped_years_str = "Year column or Final Merged Family Id not found."
+    if not group_counts.empty:
+        most_repeated_group = group_counts.idxmax()
+        num_families = group_counts.max()
+        most_repeated_families = groups_df[groups_df["Final Merged Family Id"] == most_repeated_group]["Family Id"].unique()
 
-if "Ritual Name 1" in mapped_df.columns:
-    mapped_rituals = ", ".join(mapped_df["Ritual Name 1"].dropna().unique())
-else:
-    mapped_rituals = "Ritual Name 1 column not found."
+        mapped_insights["Most Repeated Group"] = (
+            f"Most repeated GROUP is {most_repeated_group} with {num_families} distinct families."
+        )
+
+        if "Date of Ritual" in mapped_df.columns:
+            family_data = mapped_df[mapped_df["Family Id"].isin(most_repeated_families)].copy()
+
+            # Hindi month mapping
+            hindi_months = {
+                'जनवरी': 'January','फरवरी': 'February','मार्च': 'March','अप्रैल': 'April','मई': 'May','जून': 'June',
+                'जुलाई': 'July','अगस्त': 'August','सितंबर': 'September','अक्टूबर': 'October','नवंबर': 'November','दिसंबर': 'December'
+            }
+            def normalize_hindi_date(date_str):
+                if pd.isna(date_str) or not isinstance(date_str, str): return None
+                for hin, eng in hindi_months.items():
+                    if hin in date_str: date_str = date_str.replace(hin, eng); break
+                return date_str.strip()
+
+            family_data["Date of Ritual"] = pd.to_datetime(
+                family_data["Date of Ritual"].apply(normalize_hindi_date),
+                format='%d %B %Y', dayfirst=True, errors='coerce'
+            )
+            valid_dates = family_data["Date of Ritual"].dropna()
+
+            if not valid_dates.empty:
+                first_date = valid_dates.min().strftime("%d %B %Y")
+                last_date = valid_dates.max().strftime("%d %B %Y")
+                mapped_insights["First Last Appearance"] = f"First Appearance: {first_date}\nLast Appearance: {last_date}"
+            elif "Year" in family_data.columns:
+                years = pd.to_numeric(family_data["Year"], errors="coerce").dropna()
+                if not years.empty:
+                    mapped_insights["First Last Appearance"] = (
+                        f"First Appearance (Year): {int(years.min())}\nLast Appearance (Year): {int(years.max())}"
+                    )
+
+            # Seasonal frequency
+            if not family_data["Date of Ritual"].isna().all():
+                family_data["Month"] = family_data["Date of Ritual"].dt.month_name()
+                month_counts = family_data.groupby("Month")["Family Id"].nunique()
+                if not month_counts.empty:
+                    most_common_month = month_counts.idxmax()
+                    mapped_insights["Seasonal Frequency"] = f"Most common month: {most_common_month}"
+
+            # Timeline
+            valid_years = family_data["Date of Ritual"].dt.year.dropna()
+            if valid_years.empty and "Year" in family_data.columns:
+                valid_years = pd.to_numeric(family_data["Year"], errors="coerce").dropna()
+            if not valid_years.empty:
+                most_common_year = valid_years.value_counts().idxmax()
+                timeline = " - ".join(map(str, sorted(valid_years.unique())))
+                mapped_insights["Timeline"] = f"Most appeared year: {most_common_year}\nTimeline: {timeline}"
+
+            # Average family size
+            family_counts = family_data["Family Id"].value_counts()
+            if not family_counts.empty:
+                most_repeated_family = family_counts.idxmax()
+                family_records = family_data[family_data["Family Id"] == most_repeated_family]
+                total_individuals = family_records["Individual ID"].count()
+                distinct_groups = family_records["Group ID"].nunique()
+                if distinct_groups > 0:
+                    avg_family_size = round(total_individuals / distinct_groups)
+                    mapped_insights["Average Family Size"] = f"{avg_family_size} (across {distinct_groups} groups)"
+
+            # Origin (ancestral location)
+            first_appearance = family_data[family_data["Date of Ritual"].notna()].nsmallest(1, "Date of Ritual")
+            location_columns = ['Village/City','Village','City','Native Place','Native']
+            for col in location_columns:
+                if col in first_appearance.columns and not first_appearance[col].isna().all():
+                    location = first_appearance[col].iloc[0]
+                    if pd.notna(location) and str(location).strip() != "":
+                        mapped_insights["Origin"] = f"{location} (from earliest record)"
+                        break
 
 # -------------------------------
 # OpenAI Descriptions
@@ -152,10 +215,12 @@ prompts = {
     "Mapped Individuals": f"Write a friendly description of Total Individuals: {mapped_individuals}.",
     "Mapped Families": f"Write a friendly description of Total Families: {mapped_families}.",
     "Mapped Gender": f"Write a friendly description of this gender distribution:\n{mapped_gender}",
-    "Mapped Villages": f"Write a friendly description of top 5 villages:\n{mapped_villages_str}",
-    "Mapped Castes": f"Write a friendly description of top 5 castes:\n{mapped_castes_str}",
-    "Mapped Years": f"Write a friendly description of top 5 years:\n{mapped_years_str}",
-    "Mapped Rituals": f"Write a friendly description of unique rituals:\n{mapped_rituals}",
+    "Mapped Most Repeated Group": f"Write a friendly description:\n{mapped_insights['Most Repeated Group']}",
+    "Mapped First Last Appearance": f"Write a friendly description:\n{mapped_insights['First Last Appearance']}",
+    "Mapped Seasonal Frequency": f"Write a friendly description:\n{mapped_insights['Seasonal Frequency']}",
+    "Mapped Timeline": f"Write a friendly description:\n{mapped_insights['Timeline']}",
+    "Mapped Average Family Size": f"Write a friendly description:\n{mapped_insights['Average Family Size']}",
+    "Mapped Origin": f"Write a friendly description:\n{mapped_insights['Origin']}",
 }
 
 st.subheader("Generated Descriptions:")
@@ -193,7 +258,9 @@ with col2:
     st.markdown(f"- Total Individuals: {mapped_individuals}")
     st.markdown(f"- Total Families: {mapped_families}")
     st.markdown(f"- Gender Distribution:\n```\n{mapped_gender}\n```")
-    st.markdown(f"- Top Villages:\n```\n{mapped_villages_str}\n```")
-    st.markdown(f"- Top Castes:\n```\n{mapped_castes_str}\n```")
-    st.markdown(f"- Top Years:\n```\n{mapped_years_str}\n```")
-    st.markdown(f"- Unique Rituals:\n```\n{mapped_rituals}\n```")
+    st.markdown(f"- Most Repeated Group:\n```\n{mapped_insights['Most Repeated Group']}\n```")
+    st.markdown(f"- First/Last Appearance:\n```\n{mapped_insights['First Last Appearance']}\n```")
+    st.markdown(f"- Seasonal Frequency:\n```\n{mapped_insights['Seasonal Frequency']}\n```")
+    st.markdown(f"- Timeline:\n```\n{mapped_insights['Timeline']}\n```")
+    st.markdown(f"- Average Family Size:\n```\n{mapped_insights['Average Family Size']}\n```")
+    st.markdown(f"- Origin:\n```\n{mapped_insights['Origin']}\n```")
